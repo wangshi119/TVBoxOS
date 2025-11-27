@@ -156,26 +156,17 @@ jobs:
           echo "=== 检查构建变体 ==="
           ./gradlew tasks --no-daemon | grep -i "assemble.*[Rr]elease" || echo "没有找到release相关的assemble任务"
       
-      - name: Build APK with Gradle (Skip Pyramid)
+      - name: Build APK with Gradle (Simple Approach)
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
           echo "=== 开始清理项目 ==="
           ./gradlew clean --no-daemon
           
-          echo "=== 尝试构建（排除pyramid模块）==="
+          echo "=== 尝试直接构建app模块 ==="
           
-          # 尝试构建，排除有问题的pyramid模块
-          if ./gradlew tasks --no-daemon | grep -q "assembleRelease"; then
-            echo "找到 assembleRelease 任务，开始构建（排除pyramid）..."
-            ./gradlew assembleRelease -x :pyramid:generateReleasePythonRequirements -x :pyramid:compileReleasePythonBuild -x :pyramid:generateReleasePythonBuildConfig --no-daemon --stacktrace
-          elif ./gradlew tasks --no-daemon | grep -q "assembleNormalRelease"; then
-            echo "找到 assembleNormalRelease 任务，开始构建（排除pyramid）..."
-            ./gradlew assembleNormalRelease -x :pyramid:generateReleasePythonRequirements -x :pyramid:compileReleasePythonBuild -x :pyramid:generateReleasePythonBuildConfig --no-daemon --stacktrace
-          else
-            echo "尝试直接构建（排除pyramid）..."
-            ./gradlew build -x :pyramid:generateReleasePythonRequirements -x :pyramid:compileReleasePythonBuild -x :pyramid:generateReleasePythonBuildConfig --no-daemon --stacktrace
-          fi
+          # 直接构建app模块，跳过其他可能有问题的模块
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace
           
           echo "=== 构建完成，查找APK文件 ==="
           find . -name "*.apk" -type f | while read file; do
@@ -245,7 +236,7 @@ jobs:
           **Credit:** [${{ matrix.userName }}](${{ env.upStream }})
           **Commit:** ${{ env.commit }}
           **Build Date:** $(date +"%Y-%m-%d %H:%M:%S")
-          **Note:** This build excludes the pyramid module (Python components) due to Chaquopy configuration issues in CI environment.
+          **Note:** This build may exclude some Python components due to Chaquopy configuration issues in CI environment.
           
           ## Changelog:
           \`\`\`
@@ -268,7 +259,7 @@ jobs:
           echo "- Source Code: sourceCode-${{ env.commitS }}.tar.xz" >> ReleaseNotes.md
           echo "" >> ReleaseNotes.md
           echo "## Build Note:" >> ReleaseNotes.md
-          echo "- Pyramid module (Python components) was excluded from this build due to Chaquopy configuration issues in CI environment." >> ReleaseNotes.md
+          echo "- Some Python components may be excluded from this build due to Chaquopy configuration issues in CI environment." >> ReleaseNotes.md
       
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
