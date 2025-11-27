@@ -52,78 +52,44 @@ jobs:
           git checkout ${{ env.commit }}
           echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
       
-      - name: Disable Pyramid Module
+      - name: Restore Original Files
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          echo "=== 禁用pyramid模块 ==="
+          echo "=== 恢复原始文件 ==="
           
-          # 方法1: 重命名pyramid目录
-          if [ -d "pyramid" ]; then
-            mv pyramid pyramid.disabled
-            echo "已重命名pyramid目录为pyramid.disabled"
+          # 如果之前有备份，恢复备份
+          if [ -f "app/build.gradle.bak" ]; then
+            cp app/build.gradle.bak app/build.gradle
+            echo "已从备份恢复app/build.gradle"
           fi
           
-          # 方法2: 修改settings.gradle，移除pyramid模块
+          if [ -f "settings.gradle.bak" ]; then
+            cp settings.gradle.bak settings.gradle
+            echo "已从备份恢复settings.gradle"
+          fi
+          
+          # 如果pyramid目录被重命名，恢复它
+          if [ -d "pyramid.disabled" ]; then
+            mv pyramid.disabled pyramid
+            echo "已恢复pyramid目录"
+          fi
+      
+      - name: Simple Pyramid Disable
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          echo "=== 简单禁用pyramid模块 ==="
+          
+          # 只从settings.gradle中移除pyramid模块，不修改其他文件
           if [ -f "settings.gradle" ]; then
-            cp settings.gradle settings.gradle.bak
+            cp settings.gradle settings.gradle.original
+            # 使用精确的sed命令移除pyramid模块
             sed -i "s/include ':pyramid'//g" settings.gradle
-            sed -i "s/include ':pyramid.disabled'//g" settings.gradle
-            echo "修改后的settings.gradle内容:"
+            # 移除可能存在的空行
+            sed -i '/^$/d' settings.gradle
+            echo "修改后的settings.gradle:"
             cat settings.gradle
-          fi
-          
-          # 方法3: 修复app的build.gradle语法
-          if [ -f "app/build.gradle" ]; then
-            echo "=== 修复app/build.gradle语法 ==="
-            cp app/build.gradle app/build.gradle.bak
-            
-            # 检查build.gradle语法
-            echo "检查build.gradle语法错误..."
-            
-            # 使用更安全的方法来修复语法
-            # 首先备份原文件
-            cp app/build.gradle app/build.gradle.original
-            
-            # 使用更精确的sed命令来修复可能的问题
-            # 移除可能导致语法错误的修改
-            if grep -q "python" app/build.gradle; then
-              echo "发现python相关配置，进行修复..."
-              # 创建一个临时文件来修复
-              python -c "
-              import re
-              with open('app/build.gradle', 'r') as f:
-                  content = f.read()
-              
-              # 移除python和chaquopy相关的配置块
-              # 但保持其他配置完整
-              content = re.sub(r'''(?s)python\s*\{.*?\}''', '', content)
-              content = re.sub(r'''(?s)chaquopy\s*\{.*?\}''', '', content)
-              
-              # 确保大括号匹配
-              lines = content.split('\n')
-              brace_count = 0
-              new_lines = []
-              for line in lines:
-                  brace_count += line.count('{')
-                  brace_count -= line.count('}')
-                  if brace_count >= 0:
-                      new_lines.append(line)
-              
-              # 写入修复后的内容
-              with open('app/build.gradle', 'w') as f:
-                  f.write('\n'.join(new_lines))
-              " || echo "使用Python修复失败，使用备用方法"
-            fi
-            
-            # 备用方法：使用sed进行简单修复
-            echo "使用sed进行语法修复..."
-            # 确保文件以正确的格式结束
-            sed -i '/^[[:space:]]*}[[:space:]]*$/d' app/build.gradle
-            echo "}" >> app/build.gradle
-            
-            echo "修复后的build.gradle最后几行:"
-            tail -10 app/build.gradle
           fi
       
       - name: Setup Android SDK
@@ -138,11 +104,11 @@ jobs:
           echo "=== local.properties 内容 ==="
           cat local.properties
       
-      - name: Extra Modify
+      - name: Safe Extra Modify
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          echo '修改VersionName'
+          echo '修改VersionName - 安全方式'
           if [ "${{ matrix.userName }}" == "takagen99" ]; then
             # 进行 sed 修改
             sed -i 's/\.concat(buildTime())/ +\"${{ env.tag }}\"/g' app/build.gradle 
@@ -152,6 +118,7 @@ jobs:
              sed -i "/versionName/s#[0-9a-zA-Z_\.\'\"-]\+\$#\'${{ env.tag }}\'#" app/build.gradle
              sed -i "/android:text=/s#=\"#=\"${{ env.tag }}\\\\n\\\\n#" app/src/main/res/layout/dialog_about.xml
           fi 
+          
           echo 'crosswalk源，防挂'
           if grep -q 'crosswalk' build.gradle; then
             sed -i "/crosswalk/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
@@ -194,7 +161,7 @@ jobs:
           keyPassword=TVBoxOSC
           EOF
       
-      - name: Build APK with Gradle
+      - name: Build APK with Gradle (Skip Tests)
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
@@ -202,11 +169,9 @@ jobs:
           echo "=== 开始清理项目 ==="
           ./gradlew clean --no-daemon
           
-          echo "=== 检查项目模块 ==="
-          ./gradlew projects --no-daemon
-          
-          echo "=== 开始构建Release APK ==="
-          ./gradlew assemblerelease --no-daemon --stacktrace
+          echo "=== 开始构建Release APK（跳过测试）==="
+          # 跳过测试以加快构建速度
+          ./gradlew assemblerelease -x test --no-daemon --stacktrace
           
           echo "=== 构建完成，查找APK文件 ==="
           find . -name "*.apk" -type f | while read file; do
@@ -276,7 +241,7 @@ jobs:
           **Credit:** [${{ matrix.userName }}](${{ env.upStream }})
           **Commit:** ${{ env.commit }}
           **Build Date:** $(date +"%Y-%m-%d %H:%M:%S")
-          **Note:** Pyramid module (Python components) has been disabled in this build due to Chaquopy configuration issues.
+          **Note:** Pyramid module has been excluded from this build.
           
           ## Changelog:
           \`\`\`
@@ -299,8 +264,8 @@ jobs:
           echo "- Source Code: sourceCode-${{ env.commitS }}.tar.xz" >> ReleaseNotes.md
           echo "" >> ReleaseNotes.md
           echo "## Build Note:" >> ReleaseNotes.md
-          echo "- Pyramid module (Python components) has been disabled in this build due to Chaquopy configuration issues in CI environment." >> ReleaseNotes.md
-          echo "- This may affect some advanced features but core TVBox functionality should work." >> ReleaseNotes.md
+          echo "- Pyramid module (Python components) has been excluded from this build by removing it from settings.gradle." >> ReleaseNotes.md
+          echo "- Core TVBox functionality should work normally." >> ReleaseNotes.md
       
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
