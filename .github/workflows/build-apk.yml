@@ -52,6 +52,23 @@ jobs:
           git checkout ${{ env.commit }}
           echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
       
+      - name: Setup Android SDK
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          # 设置Android SDK路径
+          ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          echo "ndk.dir=$ANDROID_SDK_ROOT/ndk-bundle" >> local.properties
+          
+          # 检查Android SDK是否存在
+          echo "=== 检查Android SDK ==="
+          ls -la $ANDROID_SDK_ROOT/ || echo "Android SDK目录不存在"
+          ls -la $ANDROID_SDK_ROOT/cmdline-tools/ || echo "cmdline-tools目录不存在"
+          
+          echo "=== local.properties 内容 ==="
+          cat local.properties
+      
       - name: Extra Modify
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
@@ -148,7 +165,10 @@ jobs:
         run: |
           chmod +x gradlew
           echo "=== 开始清理项目 ==="
-          ./gradlew clean
+          ./gradlew clean --no-daemon
+          
+          echo "=== 检查项目配置 ==="
+          ./gradlew projects --no-daemon || true
           
           echo "=== 开始构建Release APK ==="
           ./gradlew assemblerelease --no-daemon --stacktrace --info
@@ -174,7 +194,7 @@ jobs:
             find . -type f -name "*.apk" 2>/dev/null || echo "没有找到.apk文件"
             # 尝试查找build目录
             echo "build目录内容："
-            find app/build -type f 2>/dev/null | head -20
+            find app/build -type f 2>/dev/null | head -20 || echo "app/build目录不存在"
             exit 1
           fi
           
