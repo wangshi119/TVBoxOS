@@ -26,6 +26,8 @@ import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter;
 import com.google.android.exoplayer2.util.Clock;
 import com.google.android.exoplayer2.util.EventLogger;
 import com.google.android.exoplayer2.video.VideoSize;
+import com.google.android.exoplayer2.ui.CaptionStyleCompat;
+import com.google.android.exoplayer2.text.Cue;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -56,31 +58,65 @@ public class ExoMediaPlayer extends AbstractPlayer implements Player.Listener {
     protected DefaultTrackSelector trackSelector;
 
     protected String currentPlayPath;
+    
+    private CaptionStyleCompat mCaptionStyle;
 
     public ExoMediaPlayer(Context context) {
         mAppContext = context.getApplicationContext();
         mMediaSourceHelper = ExoMediaSourceHelper.getInstance(context);
+        
+        // 初始化字幕样式
+        mCaptionStyle = new CaptionStyleCompat(
+                CaptionStyleCompat.EDGE_TYPE_OUTLINE, // 字幕边缘类型
+                0xFFFFFFFF, // 字幕文字颜色（白色）
+                0x00000000, // 背景颜色（透明）
+                CaptionStyleCompat.EDGE_TYPE_OUTLINE, // 边缘类型
+                0xFF000000, // 边缘颜色（黑色）
+                null // 字体
+        );
     }
 
     @Override
     public void initPlayer() {
+        // 创建轨道选择器参数构建器
+        DefaultTrackSelector.ParametersBuilder parametersBuilder = new DefaultTrackSelector.ParametersBuilder(mAppContext);
+        
+        // 启用文本轨道（字幕）并设置选择规则
+        parametersBuilder.setPreferredTextLanguage("zh") // 优先选择中文字幕
+                .setSelectUndeterminedTextLanguage(true) // 选择未确定语言的字幕
+                .setDisabledTextTrackSelectionFlags(0) // 启用所有文本轨道
+                .setIgnoredTextSelectionFlags(0); // 不忽略任何文本轨道标志
+
+        // 如果 trackSelector 为 null，创建新的 DefaultTrackSelector 并应用参数
+        if (mTrackSelector == null) {
+            trackSelector = new DefaultTrackSelector(mAppContext);
+            trackSelector.setParameters(parametersBuilder.build());
+            mTrackSelector = trackSelector;
+        } else if (mTrackSelector instanceof DefaultTrackSelector) {
+            // 如果已经是 DefaultTrackSelector 实例，直接设置参数
+            trackSelector = (DefaultTrackSelector) mTrackSelector;
+            trackSelector.setParameters(parametersBuilder.build());
+        }
+
         mInternalPlayer = new SimpleExoPlayer.Builder(
                 mAppContext,
-                mRenderersFactory == null ? mRenderersFactory = new DefaultRenderersFactory(mAppContext).setEnableDecoderFallback(true)  // 启用解码器回退，避免硬件加速问题
+                mRenderersFactory == null ? mRenderersFactory = new DefaultRenderersFactory(mAppContext)
+                        .setEnableDecoderFallback(true)  // 启用解码器回退，避免硬件加速问题
                         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER) : mRenderersFactory,
-                mTrackSelector == null ? mTrackSelector = new DefaultTrackSelector(mAppContext) : mTrackSelector,
+                mTrackSelector,
                 new DefaultMediaSourceFactory(mAppContext),
                 mLoadControl == null ? mLoadControl = new DefaultLoadControl() : mLoadControl,
                 DefaultBandwidthMeter.getSingletonInstance(mAppContext),
                 new AnalyticsCollector(Clock.DEFAULT))
                 .build();
+        
         setOptions();
 
         // 播放器日志（当开启日志且 mTrackSelector 为 MappingTrackSelector 时）
         if (VideoViewManager.getConfig().mIsEnableLog && mTrackSelector instanceof MappingTrackSelector) {
             mInternalPlayer.addAnalyticsListener(new EventLogger((MappingTrackSelector) mTrackSelector, "ExoPlayer"));
         }
-        if(trackSelector == null)trackSelector=(DefaultTrackSelector)mTrackSelector;
+        
         mInternalPlayer.addListener(this);
     }
 
@@ -234,8 +270,23 @@ public class ExoMediaPlayer extends AbstractPlayer implements Player.Listener {
 
     @Override
     public void setOptions() {
-        //准备好就开始播放
+        // 准备好就开始播放
         mInternalPlayer.setPlayWhenReady(true);
+        
+        // 配置字幕
+        if (mInternalPlayer != null) {
+            // 设置字幕样式
+            mInternalPlayer.setCaptionStyle(mCaptionStyle);
+            
+            // 启用文本轨道输出
+            mInternalPlayer.getTextComponent().addTextOutput(new Player.TextComponent.TextOutput() {
+                @Override
+                public void onCues(@NonNull List<Cue> cues) {
+                    // 字幕回调，可以在这里处理字幕显示
+                    // 这个回调确保字幕轨道被激活和处理
+                }
+            });
+        }
     }
 
     @Override
