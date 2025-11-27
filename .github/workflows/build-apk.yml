@@ -1,0 +1,235 @@
+name: Build TVBox APK
+
+on:
+  schedule:
+    - cron: '0 13 1 * *'
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: '忽略构建记录以重新构建'
+        required: false
+        type: boolean
+      donotpublish:
+        description: '构建后不提交发布新版'
+        required: false
+        type: boolean
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - userName: q215613905
+            repoName: TVBoxOS
+            branchName: main
+            java_ver: 11
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Check New Commit
+        run: |
+          upStream=https://github.com/${{ matrix.userName }}/${{ matrix.repoName }}
+          echo "upStream=$upStream" >> $GITHUB_ENV
+          commit=$(curl -sL $upStream/commits/${{ matrix.branchName }} |grep -o "/${{ matrix.userName }}/${{ matrix.repoName }}/commit/[a-z0-9]\+" |head -1 | cut -d\/ -f5)
+          if [[ -z "${commit}" ]]; then
+            commit=$(curl -s "https://api.github.com/repos/${{ matrix.userName }}/${{ matrix.repoName }}/commits/${{ matrix.branchName }}?per_page=1" | jq -r '.sha' )
+          fi
+          if ! grep -q "$commit" README.md || [ "${{ inputs.rebuild }}" == "true" ]; then
+            echo "commit=$commit" >> $GITHUB_ENV
+            echo "commitS=${commit:0:7}" >> $GITHUB_ENV
+          fi
+          echo "commit=$commit"
+      
+      - name: Checkout Source Code
+        if: ${{ env.commit }}
+        run: |
+          git clone ${{ env.upStream }} TVBoxOSC
+          cd TVBoxOSC
+          git checkout ${{ env.commit }}
+          echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
+      
+      - name: Extra Modify
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          echo '修改VersionName'
+          if [ "${{ matrix.userName }}" == "takagen99" ]; then
+            # 进行 sed 修改
+            sed -i 's/\.concat(buildTime())/ +\"${{ env.tag }}\"/g' app/build.gradle 
+            # 目前关于页面没有合并我的分支
+            sed -i "/android:text=/s#=\"#=\"${{ env.tag }}\\\\n\\\\n#" app/src/main/res/layout/dialog_about.xml
+          else
+             sed -i "/versionName/s#[0-9a-zA-Z_\.\'\"-]\+\$#\'${{ env.tag }}\'#" app/build.gradle
+             sed -i "/android:text=/s#=\"#=\"${{ env.tag }}\\\\n\\\\n#" app/src/main/res/layout/dialog_about.xml
+          fi 
+          echo 'crosswalk源，防挂'
+          if grep -q 'crosswalk' build.gradle; then
+            sed -i "/crosswalk/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
+          else
+            sed -i "/jitpack.io/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
+          fi
+      
+      - name: Compress Source Code
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          tar -cJf sourceCode-${{ env.commitS }}.tar.xz --exclude=.git --exclude=.github *
+      
+      - name: Release Apk Sign
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          # 创建签名配置
+          cat > keystore.properties << 'EOF'
+          RELEASE_STORE_FILE=TVBoxOSC.jks
+          RELEASE_KEY_ALIAS=TVBoxOSC
+          RELEASE_STORE_PASSWORD=TVBoxOSC
+          RELEASE_KEY_PASSWORD=TVBoxOSC
+          EOF
+          
+          # 生成签名密钥库
+          keytool -genkey -v -keystore TVBoxOSC.jks -alias TVBoxOSC -keyalg RSA -keysize 2048 -validity 10000 -storepass TVBoxOSC -keypass TVBoxOSC -dname "CN=TVBoxOSC, OU=TVBoxOSC, O=TVBoxOSC, L=Unknown, ST=Unknown, C=CN"
+          
+          # 修改 build.gradle 添加签名配置
+          sed -i '/android {/a\
+          signingConfigs {\
+              release {\
+                  storeFile file("TVBoxOSC.jks")\
+                  storePassword "TVBoxOSC"\
+                  keyAlias "TVBoxOSC"\
+                  keyPassword "TVBoxOSC"\
+                  v1SigningEnabled true\
+                  v2SigningEnabled true\
+                  v3SigningEnabled true\
+                  v4SigningEnabled true\
+              }\
+          }' app/build.gradle
+          
+          sed -i '/buildTypes {/a\
+          release {\
+              signingConfig signingConfigs.release\
+              minifyEnabled false\
+              proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"\
+          }' app/build.gradle
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '${{ matrix.java_ver }}'
+      
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '7.5'
+      
+      - name: Build APK with Gradle
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          chmod +x gradlew
+          ./gradlew clean
+          ./gradlew assemblerelease --no-daemon --warning-mode=all --stacktrace
+          # 或者使用 assembleDebug 用于调试
+          # ./gradlew assembleDebug --no-daemon --warning-mode=all --stacktrace
+      
+      - name: Find and Prepare APK Files
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          echo "查找APK文件..."
+          find . -name "*.apk" -type f | while read file; do
+            echo "找到APK: $file"
+            ls -la "$file"
+          done
+          
+          # 创建输出目录
+          mkdir -p apk_output
+          
+          # 复制所有APK文件到输出目录
+          find . -name "*.apk" -type f -exec cp {} apk_output/ \;
+          
+          # 重命名APK文件
+          cd apk_output
+          for apk in *.apk; do
+            if [[ "$apk" == *"release"* ]]; then
+              new_name="TVBox_${{ matrix.userName }}_${{ env.tag }}_release.apk"
+            elif [[ "$apk" == *"debug"* ]]; then
+              new_name="TVBox_${{ matrix.userName }}_${{ env.tag }}_debug.apk"
+            else
+              new_name="TVBox_${{ matrix.userName }}_${{ env.tag }}_${apk}"
+            fi
+            mv "$apk" "$new_name"
+            echo "重命名: $apk -> $new_name"
+          done
+          
+          # 列出最终文件
+          echo "最终APK文件:"
+          ls -la
+          
+          # 复制源码压缩包
+          cp ../sourceCode-${{ env.commitS }}.tar.xz .
+      
+      - name: Create Release Notes
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          cd apk_output
+          lastCommit=$(grep "${{ matrix.userName }}\/${{ matrix.repoName }}" ${{ github.workspace }}/README.md |grep -o '[a-z0-9]\{40\}' || echo "")
+          export LESSCHARSET=utf-8
+          echo -e "Credit: [${{ matrix.userName }}](${{ env.upStream }})\nCommit: ${{ env.commit }}\nBuild Date: $(date)\nChangelog:\n\`\`\`" > ReleaseNotes.md
+          if [ -n "$lastCommit" ] && [ "${{ env.commit }}" == "${lastCommit}" ]; then
+            git log --pretty=format:%B ${{ env.commitS }} -1 |sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' |cat -n |sort -k2,2 -k1,1n |uniq -f1 |sort -k1,1n |cut -f2- >> ReleaseNotes.md
+          else
+            git log --pretty=format:%B ${{ env.commitS }}...${lastCommit:0:7} 2>/dev/null |sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' |cat -n |sort -k2,2 -k1,1n |uniq -f1 |sort -k1,1n |cut -f2- >> ReleaseNotes.md || echo "No previous commit found for comparison" >> ReleaseNotes.md
+          fi
+          echo -e '\n```' >> ReleaseNotes.md
+      
+      - name: Upload APK Artifacts
+        uses: actions/upload-artifact@v4
+        if: ${{ env.commit }}
+        with:
+          name: TVBox-APK-${{ matrix.userName }}-${{ env.tag }}
+          path: |
+            TVBoxOSC/apk_output/*
+          retention-days: 30
+      
+      - name: Create GitHub Release
+        if: ${{ env.commit && !inputs.donotpublish }}
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: build-${{ env.tag }}
+          release_name: "TVBox Build ${{ env.tag }}"
+          body_path: TVBoxOSC/apk_output/ReleaseNotes.md
+          files: |
+            TVBoxOSC/apk_output/*.apk
+            TVBoxOSC/apk_output/*.tar.xz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Whether Or Not to Publish
+        if: ${{ inputs.donotpublish && env.commit }}
+        run: |
+          echo "跳过发布步骤"
+  
+  clean:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete older workflow runs and artifacts
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 14
+          keep_minimum_runs: 10
