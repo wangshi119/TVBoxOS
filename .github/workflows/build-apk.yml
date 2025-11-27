@@ -61,11 +61,6 @@ jobs:
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
           echo "ndk.dir=$ANDROID_SDK_ROOT/ndk-bundle" >> local.properties
           
-          # 检查Android SDK是否存在
-          echo "=== 检查Android SDK ==="
-          ls -la $ANDROID_SDK_ROOT/ || echo "Android SDK目录不存在"
-          ls -la $ANDROID_SDK_ROOT/cmdline-tools/ || echo "cmdline-tools目录不存在"
-          
           echo "=== local.properties 内容 ==="
           cat local.properties
       
@@ -124,54 +119,41 @@ jobs:
           keyAlias=TVBoxOSC
           keyPassword=TVBoxOSC
           EOF
-          
-          # 创建签名配置的临时文件
-          cat > signing_config.txt << 'EOF'
-          signingConfigs {
-              config {
-                  storeFile file("TVBoxOSC.jks")
-                  storePassword "TVBoxOSC"
-                  keyAlias "TVBoxOSC"
-                  keyPassword "TVBoxOSC"
-              }
-          }
-          EOF
-          
-          # 在android块后插入签名配置
-          sed -i '/android {/r signing_config.txt' app/build.gradle
-          
-          # 创建release配置的临时文件
-          cat > release_config.txt << 'EOF'
-          release {
-              signingConfig signingConfigs.config
-              minifyEnabled false
-              proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
-          }
-          EOF
-          
-          # 在buildTypes块后插入release配置
-          sed -i '/buildTypes {/r release_config.txt' app/build.gradle
-          
-          # 清理临时文件
-          rm -f signing_config.txt release_config.txt
-          
-          echo "=== 修改后的build.gradle签名配置 ==="
-          grep -A 10 "signingConfigs" app/build.gradle || echo "未找到signingConfigs"
-          grep -A 5 "release {" app/build.gradle || echo "未找到release配置"
+      
+      - name: Check Available Gradle Tasks
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          chmod +x gradlew
+          echo "=== 检查可用的Gradle任务 ==="
+          ./gradlew tasks --no-daemon | grep -i assemble || echo "没有找到assemble任务"
+          ./gradlew tasks --no-daemon | grep -i build || echo "没有找到build任务"
+          echo "=== 检查构建变体 ==="
+          ./gradlew tasks --no-daemon | grep -i "assemble.*[Rr]elease" || echo "没有找到release相关的assemble任务"
       
       - name: Build APK with Gradle
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          chmod +x gradlew
           echo "=== 开始清理项目 ==="
           ./gradlew clean --no-daemon
           
-          echo "=== 检查项目配置 ==="
-          ./gradlew projects --no-daemon || true
+          echo "=== 尝试不同的构建任务 ==="
           
-          echo "=== 开始构建Release APK ==="
-          ./gradlew assemblerelease --no-daemon --stacktrace --info
+          # 尝试常见的构建任务
+          if ./gradlew tasks --no-daemon | grep -q "assembleRelease"; then
+            echo "找到 assembleRelease 任务，开始构建..."
+            ./gradlew assembleRelease --no-daemon --stacktrace
+          elif ./gradlew tasks --no-daemon | grep -q "assembleNormalRelease"; then
+            echo "找到 assembleNormalRelease 任务，开始构建..."
+            ./gradlew assembleNormalRelease --no-daemon --stacktrace
+          elif ./gradlew tasks --no-daemon | grep -q "assemble"; then
+            echo "找到 assemble 任务，开始构建..."
+            ./gradlew assemble --no-daemon --stacktrace
+          else
+            echo "尝试直接构建..."
+            ./gradlew build --no-daemon --stacktrace
+          fi
           
           echo "=== 构建完成，查找APK文件 ==="
           find . -name "*.apk" -type f | while read file; do
@@ -192,9 +174,9 @@ jobs:
             echo "错误：未找到任何APK文件"
             echo "当前目录结构："
             find . -type f -name "*.apk" 2>/dev/null || echo "没有找到.apk文件"
-            # 尝试查找build目录
-            echo "build目录内容："
-            find app/build -type f 2>/dev/null | head -20 || echo "app/build目录不存在"
+            # 查找build目录中的APK
+            echo "=== 搜索build目录 ==="
+            find app/build -name "*.apk" -type f 2>/dev/null | head -10 || echo "app/build目录中没有找到APK"
             exit 1
           fi
           
