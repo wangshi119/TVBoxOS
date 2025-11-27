@@ -52,6 +52,20 @@ jobs:
           git checkout ${{ env.commit }}
           echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
       
+      - name: Setup Python for Chaquopy
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          # 安装Python
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
+          
+          # 设置Python路径
+          echo "PYTHON_PATH=$(which python3)" >> $GITHUB_ENV
+          echo "=== Python版本 ==="
+          python3 --version
+          pip3 --version
+      
       - name: Setup Android SDK
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
@@ -83,6 +97,17 @@ jobs:
             sed -i "/crosswalk/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
           else
             sed -i "/jitpack.io/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
+          fi
+          
+          # 修改pyramid模块的build.gradle，设置正确的Python路径
+          if [ -f "pyramid/build.gradle" ]; then
+            echo "=== 配置pyramid模块的Python路径 ==="
+            # 备份原文件
+            cp pyramid/build.gradle pyramid/build.gradle.bak
+            # 设置Python路径
+            sed -i "s|buildPython.*|buildPython \"$PYTHON_PATH\"|g" pyramid/build.gradle
+            echo "修改后的pyramid build.gradle Python配置:"
+            grep -n "buildPython" pyramid/build.gradle || echo "未找到buildPython配置"
           fi
       
       - name: Compress Source Code
@@ -131,28 +156,25 @@ jobs:
           echo "=== 检查构建变体 ==="
           ./gradlew tasks --no-daemon | grep -i "assemble.*[Rr]elease" || echo "没有找到release相关的assemble任务"
       
-      - name: Build APK with Gradle
+      - name: Build APK with Gradle (Skip Pyramid)
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
           echo "=== 开始清理项目 ==="
           ./gradlew clean --no-daemon
           
-          echo "=== 尝试不同的构建任务 ==="
+          echo "=== 尝试构建（排除pyramid模块）==="
           
-          # 尝试常见的构建任务
+          # 尝试构建，排除有问题的pyramid模块
           if ./gradlew tasks --no-daemon | grep -q "assembleRelease"; then
-            echo "找到 assembleRelease 任务，开始构建..."
-            ./gradlew assembleRelease --no-daemon --stacktrace
+            echo "找到 assembleRelease 任务，开始构建（排除pyramid）..."
+            ./gradlew assembleRelease -x :pyramid:generateReleasePythonRequirements -x :pyramid:compileReleasePythonBuild -x :pyramid:generateReleasePythonBuildConfig --no-daemon --stacktrace
           elif ./gradlew tasks --no-daemon | grep -q "assembleNormalRelease"; then
-            echo "找到 assembleNormalRelease 任务，开始构建..."
-            ./gradlew assembleNormalRelease --no-daemon --stacktrace
-          elif ./gradlew tasks --no-daemon | grep -q "assemble"; then
-            echo "找到 assemble 任务，开始构建..."
-            ./gradlew assemble --no-daemon --stacktrace
+            echo "找到 assembleNormalRelease 任务，开始构建（排除pyramid）..."
+            ./gradlew assembleNormalRelease -x :pyramid:generateReleasePythonRequirements -x :pyramid:compileReleasePythonBuild -x :pyramid:generateReleasePythonBuildConfig --no-daemon --stacktrace
           else
-            echo "尝试直接构建..."
-            ./gradlew build --no-daemon --stacktrace
+            echo "尝试直接构建（排除pyramid）..."
+            ./gradlew build -x :pyramid:generateReleasePythonRequirements -x :pyramid:compileReleasePythonBuild -x :pyramid:generateReleasePythonBuildConfig --no-daemon --stacktrace
           fi
           
           echo "=== 构建完成，查找APK文件 ==="
@@ -223,6 +245,7 @@ jobs:
           **Credit:** [${{ matrix.userName }}](${{ env.upStream }})
           **Commit:** ${{ env.commit }}
           **Build Date:** $(date +"%Y-%m-%d %H:%M:%S")
+          **Note:** This build excludes the pyramid module (Python components) due to Chaquopy configuration issues in CI environment.
           
           ## Changelog:
           \`\`\`
@@ -243,6 +266,9 @@ jobs:
           echo "## Download Links:" >> ReleaseNotes.md
           echo "- Release APK: TVBox_${{ matrix.userName }}_${{ env.tag }}_release.apk" >> ReleaseNotes.md
           echo "- Source Code: sourceCode-${{ env.commitS }}.tar.xz" >> ReleaseNotes.md
+          echo "" >> ReleaseNotes.md
+          echo "## Build Note:" >> ReleaseNotes.md
+          echo "- Pyramid module (Python components) was excluded from this build due to Chaquopy configuration issues in CI environment." >> ReleaseNotes.md
       
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
