@@ -52,44 +52,56 @@ jobs:
           git checkout ${{ env.commit }}
           echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
       
-      - name: Restore Original Files
+      - name: Fix Pyramid Dependencies
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          echo "=== 恢复原始文件 ==="
+          echo "=== 修复pyramid依赖问题 ==="
           
-          # 如果之前有备份，恢复备份
-          if [ -f "app/build.gradle.bak" ]; then
-            cp app/build.gradle.bak app/build.gradle
-            echo "已从备份恢复app/build.gradle"
-          fi
-          
-          if [ -f "settings.gradle.bak" ]; then
-            cp settings.gradle.bak settings.gradle
-            echo "已从备份恢复settings.gradle"
-          fi
-          
-          # 如果pyramid目录被重命名，恢复它
-          if [ -d "pyramid.disabled" ]; then
-            mv pyramid.disabled pyramid
-            echo "已恢复pyramid目录"
-          fi
-      
-      - name: Simple Pyramid Disable
-        if: ${{ env.commit }}
-        working-directory: TVBoxOSC
-        run: |
-          echo "=== 简单禁用pyramid模块 ==="
-          
-          # 只从settings.gradle中移除pyramid模块，不修改其他文件
+          # 1. 从settings.gradle中移除pyramid模块
           if [ -f "settings.gradle" ]; then
             cp settings.gradle settings.gradle.original
-            # 使用精确的sed命令移除pyramid模块
             sed -i "s/include ':pyramid'//g" settings.gradle
-            # 移除可能存在的空行
-            sed -i '/^$/d' settings.gradle
-            echo "修改后的settings.gradle:"
-            cat settings.gradle
+            echo "已从settings.gradle中移除pyramid模块"
+          fi
+          
+          # 2. 从app/build.gradle中移除对pyramid的依赖
+          if [ -f "app/build.gradle" ]; then
+            cp app/build.gradle app/build.gradle.original
+            
+            # 注释掉或移除所有对pyramid的依赖引用
+            sed -i "s/implementation project(':pyramid')/\/\/ implementation project(':pyramid')/g" app/build.gradle
+            sed -i "s/project(':pyramid')/\/\/ project(':pyramid')/g" app/build.gradle
+            
+            # 移除python和chaquopy相关的配置块
+            # 使用更安全的方法，只注释而不删除
+            if grep -q "python" app/build.gradle; then
+              echo "注释python配置块..."
+              # 使用sed注释python块
+              sed -i '/python {/,/}/{s/^/\/\//}' app/build.gradle
+            fi
+            
+            if grep -q "chaquopy" app/build.gradle; then
+              echo "注释chaquopy配置块..."
+              # 使用sed注释chaquopy块
+              sed -i '/chaquopy {/,/}/{s/^/\/\//}' app/build.gradle
+            fi
+            
+            echo "修复后的app/build.gradle相关行:"
+            grep -n "pyramid\|python\|chaquopy" app/build.gradle || echo "未找到相关配置"
+          fi
+          
+          # 3. 创建一个空的pyramid目录以避免文件不存在错误
+          if [ ! -d "pyramid" ]; then
+            mkdir pyramid
+            echo "创建空的pyramid目录"
+            # 创建一个简单的build.gradle文件
+            cat > pyramid/build.gradle << 'EOF'
+// Empty pyramid module - disabled for CI build
+configurations.maybeCreate("default")
+artifacts.add("default", file('dummy.jar'))
+EOF
+            touch pyramid/dummy.jar
           fi
       
       - name: Setup Android SDK
@@ -161,7 +173,7 @@ jobs:
           keyPassword=TVBoxOSC
           EOF
       
-      - name: Build APK with Gradle (Skip Tests)
+      - name: Build APK with Gradle
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
@@ -169,9 +181,11 @@ jobs:
           echo "=== 开始清理项目 ==="
           ./gradlew clean --no-daemon
           
-          echo "=== 开始构建Release APK（跳过测试）==="
-          # 跳过测试以加快构建速度
-          ./gradlew assemblerelease -x test --no-daemon --stacktrace
+          echo "=== 检查项目模块 ==="
+          ./gradlew projects --no-daemon
+          
+          echo "=== 开始构建Release APK ==="
+          ./gradlew assemblerelease --no-daemon --stacktrace
           
           echo "=== 构建完成，查找APK文件 ==="
           find . -name "*.apk" -type f | while read file; do
@@ -241,7 +255,7 @@ jobs:
           **Credit:** [${{ matrix.userName }}](${{ env.upStream }})
           **Commit:** ${{ env.commit }}
           **Build Date:** $(date +"%Y-%m-%d %H:%M:%S")
-          **Note:** Pyramid module has been excluded from this build.
+          **Note:** Pyramid module (Python components) has been disabled in this build.
           
           ## Changelog:
           \`\`\`
@@ -264,7 +278,7 @@ jobs:
           echo "- Source Code: sourceCode-${{ env.commitS }}.tar.xz" >> ReleaseNotes.md
           echo "" >> ReleaseNotes.md
           echo "## Build Note:" >> ReleaseNotes.md
-          echo "- Pyramid module (Python components) has been excluded from this build by removing it from settings.gradle." >> ReleaseNotes.md
+          echo "- Pyramid module (Python components) has been disabled in this build by commenting out dependencies and configurations." >> ReleaseNotes.md
           echo "- Core TVBox functionality should work normally." >> ReleaseNotes.md
       
       - name: Upload APK Artifacts
