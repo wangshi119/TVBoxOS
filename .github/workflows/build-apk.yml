@@ -52,19 +52,36 @@ jobs:
           git checkout ${{ env.commit }}
           echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
       
-      - name: Setup Python for Chaquopy
+      - name: Disable Pyramid Module
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          # 安装Python
-          sudo apt-get update
-          sudo apt-get install -y python3 python3-pip
+          echo "=== 禁用pyramid模块 ==="
           
-          # 设置Python路径
-          echo "PYTHON_PATH=$(which python3)" >> $GITHUB_ENV
-          echo "=== Python版本 ==="
-          python3 --version
-          pip3 --version
+          # 方法1: 重命名pyramid目录
+          if [ -d "pyramid" ]; then
+            mv pyramid pyramid.disabled
+            echo "已重命名pyramid目录为pyramid.disabled"
+          fi
+          
+          # 方法2: 修改settings.gradle，移除pyramid模块
+          if [ -f "settings.gradle" ]; then
+            cp settings.gradle settings.gradle.bak
+            sed -i "s/include ':pyramid'//g" settings.gradle
+            sed -i "s/include ':pyramid.disabled'//g" settings.gradle
+            echo "修改后的settings.gradle内容:"
+            cat settings.gradle
+          fi
+          
+          # 方法3: 修改app的build.gradle，移除对pyramid的依赖
+          if [ -f "app/build.gradle" ]; then
+            cp app/build.gradle app/build.gradle.bak
+            # 移除python相关的配置
+            sed -i "/python/d" app/build.gradle
+            sed -i "/chaquopy/d" app/build.gradle
+            sed -i "/pyramid/d" app/build.gradle
+            echo "已从app/build.gradle中移除python和pyramid相关配置"
+          fi
       
       - name: Setup Android SDK
         if: ${{ env.commit }}
@@ -97,17 +114,6 @@ jobs:
             sed -i "/crosswalk/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
           else
             sed -i "/jitpack.io/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
-          fi
-          
-          # 修改pyramid模块的build.gradle，设置正确的Python路径
-          if [ -f "pyramid/build.gradle" ]; then
-            echo "=== 配置pyramid模块的Python路径 ==="
-            # 备份原文件
-            cp pyramid/build.gradle pyramid/build.gradle.bak
-            # 设置Python路径
-            sed -i "s|buildPython.*|buildPython \"$PYTHON_PATH\"|g" pyramid/build.gradle
-            echo "修改后的pyramid build.gradle Python配置:"
-            grep -n "buildPython" pyramid/build.gradle || echo "未找到buildPython配置"
           fi
       
       - name: Compress Source Code
@@ -145,28 +151,19 @@ jobs:
           keyPassword=TVBoxOSC
           EOF
       
-      - name: Check Available Gradle Tasks
+      - name: Build APK with Gradle
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
           chmod +x gradlew
-          echo "=== 检查可用的Gradle任务 ==="
-          ./gradlew tasks --no-daemon | grep -i assemble || echo "没有找到assemble任务"
-          ./gradlew tasks --no-daemon | grep -i build || echo "没有找到build任务"
-          echo "=== 检查构建变体 ==="
-          ./gradlew tasks --no-daemon | grep -i "assemble.*[Rr]elease" || echo "没有找到release相关的assemble任务"
-      
-      - name: Build APK with Gradle (Simple Approach)
-        if: ${{ env.commit }}
-        working-directory: TVBoxOSC
-        run: |
           echo "=== 开始清理项目 ==="
           ./gradlew clean --no-daemon
           
-          echo "=== 尝试直接构建app模块 ==="
+          echo "=== 检查项目模块 ==="
+          ./gradlew projects --no-daemon
           
-          # 直接构建app模块，跳过其他可能有问题的模块
-          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+          echo "=== 开始构建Release APK ==="
+          ./gradlew assemblerelease --no-daemon --stacktrace
           
           echo "=== 构建完成，查找APK文件 ==="
           find . -name "*.apk" -type f | while read file; do
@@ -236,7 +233,7 @@ jobs:
           **Credit:** [${{ matrix.userName }}](${{ env.upStream }})
           **Commit:** ${{ env.commit }}
           **Build Date:** $(date +"%Y-%m-%d %H:%M:%S")
-          **Note:** This build may exclude some Python components due to Chaquopy configuration issues in CI environment.
+          **Note:** Pyramid module (Python components) has been disabled in this build due to Chaquopy configuration issues.
           
           ## Changelog:
           \`\`\`
@@ -259,7 +256,8 @@ jobs:
           echo "- Source Code: sourceCode-${{ env.commitS }}.tar.xz" >> ReleaseNotes.md
           echo "" >> ReleaseNotes.md
           echo "## Build Note:" >> ReleaseNotes.md
-          echo "- Some Python components may be excluded from this build due to Chaquopy configuration issues in CI environment." >> ReleaseNotes.md
+          echo "- Pyramid module (Python components) has been disabled in this build due to Chaquopy configuration issues in CI environment." >> ReleaseNotes.md
+          echo "- This may affect some advanced features but core TVBox functionality should work." >> ReleaseNotes.md
       
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
