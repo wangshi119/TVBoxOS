@@ -85,20 +85,6 @@ jobs:
           distribution: 'temurin'
           java-version: '11'
       
-      - name: Setup Android Environment
-        if: ${{ env.commit }}
-        run: |
-          # 设置Android环境变量
-          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/tools/bin" >> $GITHUB_PATH
-      
-      - name: Accept Android Licenses
-        if: ${{ env.commit }}
-        run: |
-          # 使用预装的Android SDK接受许可
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-      
       - name: Create Signing Configuration
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
@@ -122,23 +108,39 @@ jobs:
           keyPassword=TVBoxOSC
           EOF
           
-          # 修改 build.gradle 添加签名配置
-          sed -i '/android {/a\
-          signingConfigs {\
-              config {\
-                  storeFile file("TVBoxOSC.jks")\
-                  storePassword "TVBoxOSC"\
-                  keyAlias "TVBoxOSC"\
-                  keyPassword "TVBoxOSC"\
-              }\
-          }' app/build.gradle
+          # 创建签名配置的临时文件
+          cat > signing_config.txt << 'EOF'
+          signingConfigs {
+              config {
+                  storeFile file("TVBoxOSC.jks")
+                  storePassword "TVBoxOSC"
+                  keyAlias "TVBoxOSC"
+                  keyPassword "TVBoxOSC"
+              }
+          }
+          EOF
           
-          # 修改release构建类型使用签名
-          sed -i '/release {/{:a;n;/^[[:space:]]*}/!ba;i\
-              signingConfig signingConfigs.config\
-              minifyEnabled false\
-              proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"\
-          ' app/build.gradle
+          # 在android块后插入签名配置
+          sed -i '/android {/r signing_config.txt' app/build.gradle
+          
+          # 创建release配置的临时文件
+          cat > release_config.txt << 'EOF'
+          release {
+              signingConfig signingConfigs.config
+              minifyEnabled false
+              proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+          }
+          EOF
+          
+          # 在buildTypes块后插入release配置
+          sed -i '/buildTypes {/r release_config.txt' app/build.gradle
+          
+          # 清理临时文件
+          rm -f signing_config.txt release_config.txt
+          
+          echo "=== 修改后的build.gradle签名配置 ==="
+          grep -A 10 "signingConfigs" app/build.gradle || echo "未找到signingConfigs"
+          grep -A 5 "release {" app/build.gradle || echo "未找到release配置"
       
       - name: Build APK with Gradle
         if: ${{ env.commit }}
@@ -149,7 +151,7 @@ jobs:
           ./gradlew clean
           
           echo "=== 开始构建Release APK ==="
-          ./gradlew assemblerelease --no-daemon --stacktrace
+          ./gradlew assemblerelease --no-daemon --stacktrace --info
           
           echo "=== 构建完成，查找APK文件 ==="
           find . -name "*.apk" -type f | while read file; do
@@ -170,11 +172,15 @@ jobs:
             echo "错误：未找到任何APK文件"
             echo "当前目录结构："
             find . -type f -name "*.apk" 2>/dev/null || echo "没有找到.apk文件"
+            # 尝试查找build目录
+            echo "build目录内容："
+            find app/build -type f 2>/dev/null | head -20
             exit 1
           fi
           
           # 复制所有APK文件
           for apk in $apk_files; do
+            echo "复制APK: $apk"
             cp "$apk" apk_output/
           done
           
