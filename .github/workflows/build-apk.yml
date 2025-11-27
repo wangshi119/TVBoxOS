@@ -73,14 +73,57 @@ jobs:
             cat settings.gradle
           fi
           
-          # 方法3: 修改app的build.gradle，移除对pyramid的依赖
+          # 方法3: 修复app的build.gradle语法
           if [ -f "app/build.gradle" ]; then
+            echo "=== 修复app/build.gradle语法 ==="
             cp app/build.gradle app/build.gradle.bak
-            # 移除python相关的配置
-            sed -i "/python/d" app/build.gradle
-            sed -i "/chaquopy/d" app/build.gradle
-            sed -i "/pyramid/d" app/build.gradle
-            echo "已从app/build.gradle中移除python和pyramid相关配置"
+            
+            # 检查build.gradle语法
+            echo "检查build.gradle语法错误..."
+            
+            # 使用更安全的方法来修复语法
+            # 首先备份原文件
+            cp app/build.gradle app/build.gradle.original
+            
+            # 使用更精确的sed命令来修复可能的问题
+            # 移除可能导致语法错误的修改
+            if grep -q "python" app/build.gradle; then
+              echo "发现python相关配置，进行修复..."
+              # 创建一个临时文件来修复
+              python -c "
+              import re
+              with open('app/build.gradle', 'r') as f:
+                  content = f.read()
+              
+              # 移除python和chaquopy相关的配置块
+              # 但保持其他配置完整
+              content = re.sub(r'''(?s)python\s*\{.*?\}''', '', content)
+              content = re.sub(r'''(?s)chaquopy\s*\{.*?\}''', '', content)
+              
+              # 确保大括号匹配
+              lines = content.split('\n')
+              brace_count = 0
+              new_lines = []
+              for line in lines:
+                  brace_count += line.count('{')
+                  brace_count -= line.count('}')
+                  if brace_count >= 0:
+                      new_lines.append(line)
+              
+              # 写入修复后的内容
+              with open('app/build.gradle', 'w') as f:
+                  f.write('\n'.join(new_lines))
+              " || echo "使用Python修复失败，使用备用方法"
+            fi
+            
+            # 备用方法：使用sed进行简单修复
+            echo "使用sed进行语法修复..."
+            # 确保文件以正确的格式结束
+            sed -i '/^[[:space:]]*}[[:space:]]*$/d' app/build.gradle
+            echo "}" >> app/build.gradle
+            
+            echo "修复后的build.gradle最后几行:"
+            tail -10 app/build.gradle
           fi
       
       - name: Setup Android SDK
